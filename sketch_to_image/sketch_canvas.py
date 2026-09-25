@@ -1,4 +1,9 @@
-"""Virtual whiteboard where finger strokes are collected and rendered."""
+"""Virtual whiteboard where finger strokes are collected and rendered.
+
+Strokes are stored as raw point lists; rendering smooths them with a
+Catmull-Rom spline and draws them as tapered, pressure-like ink lines so
+even shaky air-drawing looks intentional and artistic.
+"""
 
 from typing import List, Optional, Tuple
 
@@ -24,6 +29,10 @@ class SketchCanvas:
     @property
     def has_content(self) -> bool:
         return bool(self.strokes) or self._current is not None
+
+    @property
+    def stroke_count(self) -> int:
+        return len(self.strokes) + (1 if self._current else 0)
 
     def begin_stroke(self, pt: Point):
         self._current = [pt]
@@ -52,19 +61,37 @@ class SketchCanvas:
 
     # ------------------------------------------------------------------ #
     def render(self, line_thickness: int = 6, smooth: bool = True) -> np.ndarray:
-        """Return the sketch as a single-channel-style BGR image."""
-        canvas = np.full((self.height, self.width, 3), self.bg_color, dtype=np.uint8)
+        """Return the sketch as a BGR image (white background, black ink)."""
+        canvas = np.full((self.height, self.width, 3), self.bg_color,
+                         dtype=np.uint8)
         all_strokes = list(self.strokes)
         if self._current:
             all_strokes.append(self._current)
 
         for stroke in all_strokes:
-            pts = np.array(stroke, dtype=np.int32)
-            if smooth and len(pts) >= 3:
-                pts = self._smooth_polyline(pts)
-            cv2.polylines(canvas, [pts.reshape(-1, 1, 2)], False,
-                          (0, 0, 0), line_thickness, cv2.LINE_AA)
+            self._draw_stroke(canvas, stroke, line_thickness, smooth)
         return canvas
+
+    def _draw_stroke(self, img: np.ndarray, stroke: Stroke,
+                     thickness: int, smooth: bool):
+        pts = np.array(stroke, dtype=np.int32)
+        if len(pts) < 2:
+            cv2.circle(img, tuple(pts[0]), max(thickness // 2, 2),
+                       (0, 0, 0), -1, cv2.LINE_AA)
+            return
+        if smooth and len(pts) >= 3:
+            pts = self._smooth_polyline(pts)
+
+        # Tapered ink: thin at the ends of the stroke, full weight inside.
+        n = len(pts)
+        for i in range(n - 1):
+            t = i / (n - 1)
+            taper = 0.45 + 0.55 * min(t, 1 - t) / 0.25
+            w = max(2, int(round(thickness * min(taper, 1.0))))
+            cv2.line(img, tuple(pts[i]), tuple(pts[i + 1]), (0, 0, 0),
+                     w, cv2.LINE_AA)
+        cv2.circle(img, tuple(pts[-1]), max(thickness // 2, 1),
+                   (0, 0, 0), -1, cv2.LINE_AA)
 
     @staticmethod
     def _smooth_polyline(pts: np.ndarray, samples_per_segment: int = 4) -> np.ndarray:

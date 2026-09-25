@@ -1,16 +1,17 @@
 """Generative rendering of hand-drawn sketches.
 
-Two back-ends (no heavy AI dependencies required):
+Two back-ends:
 
 1. ControlNet backend (optional, best quality)
    If a HuggingFace token is available and the `diffusers` stack is
    installed, the sketch is fed to a real Sketch->Image ControlNet model.
 
-2. Built-in procedural "neural-style" generator (always works)
+2. Built-in procedural "generative art" engine (always works, no ML deps)
    The sketch is analysed (strokes, enclosed regions, curvature), then each
-   region is rendered as a stylised generative artwork: gradient skies,
-   textured fills, glow edges, particles, palette harmonisation... every
-   generation is unique (seeded randomness).
+   region is rendered as a stylised artwork with one of several randomly
+   chosen styles: gradient skies, halftone / stripe / bokeh fills, glow ink,
+   flowing particles, film grain and vignette. Every generation is unique
+   (seeded randomness).
 """
 
 import hashlib
@@ -39,6 +40,25 @@ def generate_image(sketch_bgr: np.ndarray, seed: Optional[int] = None,
             return img
 
     return _procedural_generate(sketch_bgr, seed)
+
+
+def make_gallery(images: List[np.ndarray], cols: int = 3,
+                 cell: Tuple[int, int] = (480, 360)) -> np.ndarray:
+    """Compose generated artworks into a contact-sheet style gallery."""
+    if not images:
+        raise ValueError("no images for gallery")
+    rows = math.ceil(len(images) / cols)
+    w, h = cell
+    sheet = np.full((rows * (h + 12) + 12, cols * (w + 12) + 12, 3),
+                    (24, 20, 18), np.uint8)
+    for i, img in enumerate(images):
+        r, c = divmod(i, cols)
+        tile = cv2.resize(img, (w, h))
+        x, y = 12 + c * (w + 12), 12 + r * (h + 12)
+        sheet[y:y + h, x:x + w] = tile
+        cv2.rectangle(sheet, (x - 2, y - 2), (x + w + 1, y + h + 1),
+                      (70, 60, 55), 1)
+    return sheet
 
 
 # --------------------------------------------------------------------- #
@@ -84,7 +104,11 @@ _PALETTES = [
     [(120, 200, 87), (40, 120, 60), (250, 230, 160)],    # meadow
     [(250, 160, 60), (200, 60, 40), (255, 235, 205)],    # ember
     [(150, 120, 250), (60, 60, 160), (255, 180, 220)],   # dreamwave
+    [(255, 160, 122), (72, 61, 139), (250, 236, 215)],   # midnight sun
+    [(64, 224, 208), (34, 139, 87), (255, 250, 205)],    # aurora garden
 ]
+
+_FILL_STYLES = ("halftone", "stripes", "bokeh", "solid")
 
 
 def _procedural_generate(sketch: np.ndarray, seed: int) -> np.ndarray:
@@ -97,6 +121,7 @@ def _procedural_generate(sketch: np.ndarray, seed: int) -> np.ndarray:
     rng.shuffle(palette)
 
     canvas = _gradient_background(w, h, palette, rng)
+    canvas = _ambient_orbs(canvas, palette, rng)
 
     regions = _find_regions(lines)
     for i, mask in enumerate(regions):
@@ -120,6 +145,20 @@ def _gradient_background(w, h, palette, rng) -> np.ndarray:
     img = c1 * (1 - t) + c2 * t
     noise = np.random.default_rng(rng.randrange(1 << 31)).normal(0, 6, (h, w, 1))
     return np.clip(img + noise.astype(np.float32), 0, 255).astype(np.uint8)
+
+
+def _ambient_orbs(canvas: np.ndarray, palette, rng) -> np.ndarray:
+    """Large soft glowing circles behind everything => depth."""
+    layer = np.zeros_like(canvas, np.float32)
+    h, w = canvas.shape[:2]
+    for _ in range(rng.randint(3, 6)):
+        cx, cy = rng.randint(0, w), rng.randint(0, h)
+        r = rng.randint(min(h, w) // 8, min(h, w) // 3)
+        color = np.array(palette[rng.randrange(len(palette))], np.float32) * 0.5
+        cv2.circle(layer, (cx, cy), r, tuple(float(v) for v in color), -1)
+    layer = cv2.GaussianBlur(layer, (0, 0), 61)
+    out = canvas.astype(np.float32) + layer
+    return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def _find_regions(lines: np.uint8, min_area: int = 400) -> List[np.ndarray]:
@@ -149,7 +188,6 @@ def _paint_region(canvas: np.ndarray, mask: np.ndarray,
     cx, cy = float(xs.mean()), float(ys.mean())
     radius = max(math.sqrt(int(mask.sum()) / math.pi), 1.0)
 
-    # radial gradient fill with slight hue jitter
     jitter = np.array([rng.uniform(-25, 25)] * 3, np.float32)
     inner = np.clip(color + 60 + jitter, 0, 255)
     outer = np.clip(color - 30 + jitter, 0, 255)
@@ -159,7 +197,7 @@ def _paint_region(canvas: np.ndarray, mask: np.ndarray,
     t = np.clip(d, 0, 1)[..., None]
     fill = inner * (1 - t) + outer * t
 
-    style = rng.choice(["halftone", "stripes", "solid"])
+    style = rng.choice(_FILL_STYLES)
     if style == "halftone":
         step = rng.randint(8, 14)
         grid_y, grid_x = np.mgrid[0:canvas.shape[0]:step, 0:canvas.shape[1]:step]
@@ -177,6 +215,18 @@ def _paint_region(canvas: np.ndarray, mask: np.ndarray,
         band = np.sin(xx2 * math.cos(ang) + yy2 * math.sin(ang) / rng.uniform(.4, 1.)
                       * rng.uniform(0.05, 0.12) * 100) > 0
         fill = np.where(band[..., None], fill, fill * 0.75)
+    elif style == "bokeh":
+        pattern = np.zeros_like(canvas, np.float32)
+        for _ in range(max(10, int(radius * radius / 900))):
+            bx = int(rng.gauss(cx, radius * 0.45))
+            by = int(rng.gauss(cy, radius * 0.45))
+            br = rng.randint(3, max(4, int(radius / 5)))
+            col = tuple(float(v) for v in np.clip(inner + rng.uniform(-30, 40),
+                                                  0, 255))
+            cv2.circle(pattern, (bx, by), br, col, -1)
+        pattern = cv2.GaussianBlur(pattern, (0, 0), 5)
+        inside = (mask > 0)[..., None]
+        fill = np.where(inside & (pattern > 0), pattern, fill * 0.8)
 
     m = mask[..., None].astype(np.float32) * rng.uniform(0.55, 0.85)
     out = canvas.astype(np.float32)
@@ -203,27 +253,45 @@ def _draw_line_art(canvas: np.ndarray, lines: np.uint8,
 
 def _add_particles(canvas: np.ndarray, lines: np.uint8,
                    palette, rng: random.Random) -> np.ndarray:
+    """Sparkles near strokes + a few drifting 'fireflies' elsewhere."""
     ys, xs = np.where(lines > 0)
-    if len(xs) == 0:
-        return canvas
     out = canvas.copy()
-    for _ in range(rng.randint(40, 90)):
-        i = rng.randrange(len(xs))
-        px, py = int(xs[i]) + rng.randint(-30, 30), int(ys[i]) + rng.randint(-30, 30)
-        color = palette[rng.randrange(len(palette))]
-        cv2.circle(out, (px, py), rng.randint(1, 4),
-                   tuple(int(c) for c in color), -1, cv2.LINE_AA)
+    if len(xs) > 0:
+        for _ in range(rng.randint(50, 110)):
+            i = rng.randrange(len(xs))
+            px = int(xs[i]) + rng.randint(-34, 34)
+            py = int(ys[i]) + rng.randint(-34, 34)
+            color = palette[rng.randrange(len(palette))]
+            r = rng.randint(1, 4)
+            cv2.circle(out, (px, py), r, tuple(int(c) for c in color),
+                       -1, cv2.LINE_AA)
+            if rng.random() < 0.18:      # star-cross sparkle
+                cv2.line(out, (px - r * 2, py), (px + r * 2, py),
+                         tuple(int(c) for c in color), 1, cv2.LINE_AA)
+                cv2.line(out, (px, py - r * 2), (px, py + r * 2),
+                         tuple(int(c) for c in color), 1, cv2.LINE_AA)
+    h, w = out.shape[:2]
+    for _ in range(rng.randint(6, 14)):  # soft fireflies
+        cv2.circle(out, (rng.randint(0, w), rng.randint(0, h)),
+                   rng.randint(6, 14),
+                   tuple(int(c) for c in palette[rng.randrange(len(palette))]),
+                   1, cv2.LINE_AA)
     return out
 
 
 def _post_process(img: np.ndarray, rng: random.Random) -> np.ndarray:
-    # subtle vignette + saturation boost => "generated art" look
+    """Vignette, saturation boost and film grain => 'generated art' look."""
     h, w = img.shape[:2]
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     d = np.sqrt(((xx - w / 2) / w) ** 2 + ((yy - h / 2) / h) ** 2)
     vignette = 1 - np.clip((d - 0.35) * 0.9, 0, 0.45)
     img = img.astype(np.float32) * vignette[..., None]
 
-    hsv = cv2.cvtColor(np.clip(img, 0, 255).astype(np.uint8), cv2.COLOR_BGR2HSV)
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     hsv[..., 1] = np.clip(hsv[..., 1].astype(np.int32) + 25, 0, 255).astype(np.uint8)
-    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    grain = np.random.default_rng(rng.randrange(1 << 31)).normal(
+        0, 3.5, (h, w, 1)).astype(np.float32)
+    return np.clip(img.astype(np.float32) + grain, 0, 255).astype(np.uint8)

@@ -1,88 +1,113 @@
-# ✋ Sketch-to-Image — Draw with Your Finger, Get Generative Art
+<div align="center">
 
-A Python video-processing project that uses your **webcam + MediaPipe hand
-tracking** so you can **draw in mid-air with your index finger**, then
-**pinch (thumb + middle finger)** to turn the sketch into a **generative
-image**.
+# ✨ Sketch → Image
+
+### Draw in mid-air with your finger — watch it become generative art.
+
+A real-time computer-vision studio: point your index finger at the webcam,
+**draw in the air**, then **pinch** (thumb + middle finger) and the app turns
+your floating sketch into a unique piece of generative artwork.
+
+*MediaPipe Hands · OpenCV · NumPy · optional Stable-Diffusion ControlNet*
+
+</div>
+
+---
+
+## 🎬 How it works
 
 ```
-Webcam frames ──► HandTracker (MediaPipe) ──► fingertip path
-                                                   │
-                                                   ▼
-                       SketchCanvas (smoothing, strokes, undo)
-                                                   │  pinch gesture
-                                                   ▼
-                    Generator (procedural art engine / optional SD-ControlNet)
-                                                   │
-                                                   ▼
-                              On-screen result + saved PNGs
+webcam video ──► hand tracking ──► fingertip cursor ──► air strokes
+   (OpenCV)      (MediaPipe)        (neon HUD)         (canvas)
+                                                        │
+                              pinch gesture (~0.4 s) ◄──┘
+                                        │
+                          ┌─────────────┴──────────────┐
+                          ▼                            ▼
+              procedural art engine          Stable-Diffusion
+              (always available)             ControlNet scribble
+                                              (--controlnet)
+                                        │
+                                        ▼
+                     artwork flashed on screen + saved to output/
 ```
 
-## Project structure
+## ✋ Gestures & controls
 
-| File | Purpose |
+| Action | How |
 |---|---|
-| `main.py` | Real-time app: webcam loop, gestures, HUD, saving |
-| `hand_tracker.py` | MediaPipe hand tracking, fingertip cursor, pinch detection |
-| `sketch_canvas.py` | Virtual whiteboard: stroke capture, Catmull-Rom smoothing, undo/clear |
-| `generator.py` | Turns a sketch into generative artwork (2 back-ends) |
-| `demo.py` | Headless test — no webcam needed; writes sample images to `output/` |
-| `requirements.txt` | Dependencies |
+| ✏️ **Draw** | Raise your **index finger** and move it in front of the camera |
+| 🖼️ **Generate** | **Pinch thumb + middle finger** and hold ~0.4 s (a countdown ring fills around the cursor) |
+| `g` | Generate instantly (no pinch needed) |
+| `u` / `c` | Undo last stroke / clear canvas |
+| `s` | Save the gallery contact-sheet |
+| `h` / `q` | Toggle help panel / quit |
 
-## Install & run
+The interface shows a live status pill (`DRAWING`, `PINCH HOLD`, …), an FPS
+meter, corner brackets for the drawing area, a glowing mini-canvas preview of
+your sketch, and a cinematic flash + slide-up reveal when art is generated.
+
+## 🚀 Quick start
 
 ```bash
+cd sketch_to_image
 pip install -r requirements.txt
-python main.py                 # webcam 0
-python main.py --source 1      # other camera
-python main.py --source clip.mp4   # or a video file
+
+python main.py            # open webcam 0 and start drawing in the air
+python main.py --source 1 # different camera, or --source clip.mp4 for a file
+python demo.py --ui       # no webcam? render sample artworks + a UI mockup
 ```
 
-No webcam handy? Verify the whole pipeline headlessly:
+Every artwork (and its source sketch) is written to `output/` as
+`gen_001_sketch.png` / `gen_001_art.png`, plus a `gallery.png` contact sheet.
 
-```bash
-python demo.py     # writes output/demo_sketch.png + output/demo_generated.png
-```
+## 🧠 Generation back-ends
 
-## Gestures & keys
+**1. Built-in procedural engine (default, zero heavy deps)**
+Analyses the sketch (enclosed regions, strokes), then composes a unique
+artwork each time: gradient skies, ambient glow orbs, halftone / stripe /
+bokeh region fills, glowing ink outlines, star sparkles, film grain and
+vignette — from curated colour palettes.
 
-| Input | Action |
-|---|---|
-| Raise **index finger**, move hand | Draw a stroke in the air |
-| Open hand / lower finger | Stop current stroke |
-| **Pinch** thumb + middle finger (~0.4 s hold) | ✨ Generate image from sketch |
-| `g` | Generate without pinching |
-| `u` | Undo last stroke |
-| `c` | Clear canvas |
-| `q` / `Esc` | Quit |
-
-Generated results flash on screen for 4 seconds and are saved to
-`output/gen_NNN_sketch.png` and `output/gen_NNN_art.png`.
-
-## How generation works
-
-**Back-end 1 — built-in procedural engine (default, zero heavy deps):**
-the sketch is analysed (line extraction → connected-component region
-finding), then rendered as unique generative art: random palette
-harmonisation, gradient background, per-region textured fills (halftone /
-stripes / radial gradients), glowing ink lines, particles, vignette and
-saturation post-processing. Every generation is seeded and different.
-
-**Back-end 2 — Stable-Diffusion ControlNet (optional, real AI):**
+**2. Stable-Diffusion ControlNet (optional, state-of-the-art)**
 
 ```bash
 pip install torch diffusers transformers accelerate
-export HF_TOKEN=hf_xxx...llyasviel/sd-controlnet-scribble>
+export HF_TOKEN=hf_xxx          # accept SD-v1.5 + ControlNet on huggingface.co
 python main.py --controlnet
 ```
 
-Uses `lllyasviel/sd-controlnet-scribble` + SD-1.5 to convert the scribble
-into an image while preserving its structure. Falls back automatically to
-the procedural engine if unavailable.
+Your scribble is fed to `lllyasviel/sd-controlnet-scribble` + SD v1.5 and
+rendered as a full AI image (falls back to the procedural engine if the
+model can't load).
 
-## Notes / tuning
+## 📁 Project layout
 
-- Pinch sensitivity: `HandTracker.PINCH_RATIO` in `hand_tracker.py`.
-- Stroke thickness: `SketchCanvas.render(line_thickness=...)`.
-- Drawing area inside the frame: `ROI` constant in `main.py`.
-- The frame is mirrored (selfie view) so drawing feels natural.
+```
+sketch_to_image/
+├── main.py           # real-time app: video loop, gestures, HUD, saving
+├── hand_tracker.py   # MediaPipe hands, pinch detection, neon cursor/trail
+├── sketch_canvas.py  # stroke capture, Catmull-Rom smoothing, tapered ink
+├── generator.py      # procedural art engine + optional ControlNet backend
+├── theme.py          # shared glass-panel / pill / ring HUD design system
+├── demo.py           # headless pipeline test + sample renders (--ui mockup)
+├── requirements.txt
+└── output/           # sketches, artworks, gallery
+```
+
+## 💡 Tips
+
+* Good, even lighting on your hand = stable tracking.
+* Keep your hand inside the corner brackets while drawing.
+* Hold the pinch *still* for the ring to fill; release before it fires again.
+* Simple closed shapes (houses, faces, rockets) produce the most striking
+  region-filled artwork.
+
+## 🛠️ Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `module 'mediapipe' has no attribute 'solutions'` | `pip install mediapipe==0.10.21` |
+| Camera not found | try `--source 1`, or check OS camera permissions |
+| No GUI window on Linux | run inside a desktop session (needs display server) |
+| ControlNet falls back silently | ensure `HF_TOKEN` is set and model licenses accepted |
