@@ -2,6 +2,22 @@
 
 # ✨ Sketch → Image
 
+
+## 📸 Showcase
+
+![Interface mockup](output/demo_ui.png)
+*The live interface: neon cursor, HUD panels, gesture hints.*
+
+| Your air sketch | Generated artwork |
+|---|---|
+| ![sketch](output/demo_sketch.png) | ![art](output/demo_art_1.png) |
+
+**Gallery — 5 unique artworks generated from 2 sketches:**
+
+![gallery](output/demo_gallery.png)
+
+
+
 ### Draw in mid-air with your finger — watch it become generative art.
 
 A real-time computer-vision studio: point your index finger at the webcam,
