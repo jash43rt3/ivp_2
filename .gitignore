@@ -1,8 +1,5 @@
 __pycache__/
 *.pyc
+.DS_Store
 sketch_to_image/output/gen_*
-
-__pycache__/
-*.pyc
-sketch_to_image/output/gen_*.png
 sketch_to_image/output/gallery.png
